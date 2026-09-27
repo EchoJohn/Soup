@@ -92,3 +92,31 @@ def is_private_or_link_local(host: str) -> bool:
         or addr.is_reserved
         or addr.is_multicast
     )
+
+
+def refuse_private_ip_literal(host: str | None, *, label: str) -> None:
+    """Raise ``ValueError`` if an outbound endpoint's host is a non-public IP.
+
+    ``host`` is a URL's ``hostname``. It is refused when it is an IP literal, in
+    any spelling :func:`parse_ip_literal` accepts (IPv4-mapped IPv6 included),
+    that :func:`is_private_or_link_local` classifies as non-public, on every
+    scheme. Loopback stays allowed: these endpoints exist to reach a server on
+    the same machine. A hostname passes unchanged and is NOT resolved, so this
+    narrows which addresses a URL can name directly; it does not make internal
+    services unreachable by name. ``label`` names the setting in the message.
+    """
+    clean = (host or "").strip().lower().rstrip(".")
+    if clean.startswith("[") and clean.endswith("]"):
+        clean = clean[1:-1]
+    if not clean or clean in LOOPBACK_HOSTS:
+        return
+    addr = parse_ip_literal(clean)
+    if addr is None:
+        return
+    mapped = getattr(addr, "ipv4_mapped", None)
+    if (mapped if mapped is not None else addr).is_loopback:
+        return
+    if is_private_or_link_local(clean):
+        raise ValueError(
+            f"{label}: private/link-local/reserved IP hosts are not allowed (SSRF protection)"
+        )
