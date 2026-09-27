@@ -77,6 +77,13 @@ def is_private_or_link_local(host: str) -> bool:
     multicast / unspecified IP — the union of every guard's policy in this
     repo, since consolidating stops being safe the moment a caller's
     predicate is quietly narrower than the shared one it now uses.
+
+    Also any address ``ipaddress`` does not consider globally reachable
+    (``not is_global``) — that adds RFC 6598 shared address space,
+    ``100.64.0.0/10``, which is neither ``is_private`` nor ``is_global`` —
+    and the deprecated IPv6 site-local block ``fec0::/10``, which
+    ``ipaddress`` still reports as global. ``is_reserved`` stays: NAT64
+    ``64:ff9b::/96`` IS ``is_global``.
     """
     addr = parse_ip_literal(host)
     if addr is None:
@@ -91,6 +98,8 @@ def is_private_or_link_local(host: str) -> bool:
         or addr.is_unspecified
         or addr.is_reserved
         or addr.is_multicast
+        or not addr.is_global
+        or getattr(addr, "is_site_local", False)
     )
 
 

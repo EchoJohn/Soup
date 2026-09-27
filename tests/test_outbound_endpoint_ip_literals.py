@@ -43,12 +43,20 @@ _NON_PUBLIC_HOSTS = [
     pytest.param("0.0.0.0", id="unspecified-v4"),
     pytest.param("[::]", id="unspecified-v6"),
     pytest.param("224.0.0.1", id="multicast-v4"),
+    # RFC 6598 shared address space: neither is_private nor is_global.
+    pytest.param("100.64.0.1", id="shared-space"),
+    pytest.param("100.127.255.254", id="shared-space-top"),
+    pytest.param("[::ffff:100.64.0.1]", id="shared-space-v4-mapped"),
+    # Deprecated IPv6 site-local, which ipaddress still reports as global.
+    pytest.param("[fec0::1]", id="site-local-v6"),
 ]
 
 # Loopback is the one non-public range these endpoints exist to reach.
 _ALLOWED_HOSTS = [
     pytest.param("api.example.com", id="hostname"),
     pytest.param("8.8.8.8", id="public-v4"),
+    pytest.param("100.63.255.255", id="just-below-shared-space"),
+    pytest.param("100.128.0.1", id="just-above-shared-space"),
     pytest.param("127.0.0.1:8443", id="loopback-v4"),
     pytest.param("127.0.0.5", id="loopback-range"),
     pytest.param("127.1", id="abbreviated-loopback"),
@@ -411,3 +419,50 @@ class TestTheSharedHelper:
         refuse_private_ip_literal("::ffff:127.0.0.1", label="x")
         with pytest.raises(ValueError, match=re.escape(_REFUSED)):
             refuse_private_ip_literal("::ffff:10.0.0.1", label="x")
+
+
+class TestTheSharedPredicate:
+    """The predicate also backs webhooks, OTLP, telemetry, ``soup ingest --pull``
+    and the hub endpoints, so the two ranges it missed close for them too."""
+
+    @pytest.mark.parametrize(
+        "host",
+        [
+            "100.64.0.0", "100.100.100.200", "100.127.255.255", "::ffff:100.64.0.1",
+            "fec0::1", "feff:ffff::1",
+        ],
+    )
+    def test_non_public(self, host):
+        from soup_cli.utils.net_guard import is_private_or_link_local
+
+        assert is_private_or_link_local(host) is True
+
+    @pytest.mark.parametrize(
+        "host", ["100.63.255.255", "100.128.0.0", "8.8.8.8", "2606:4700::1111", "2001:4860::8888"]
+    )
+    def test_public(self, host):
+        from soup_cli.utils.net_guard import is_private_or_link_local
+
+        assert is_private_or_link_local(host) is False
+
+    def test_webhook_url(self):
+        from soup_cli.utils.webhooks import validate_webhook_url
+
+        with pytest.raises(ValueError, match="private/link-local/reserved"):
+            validate_webhook_url("https://100.64.0.1/hook")
+
+    def test_otlp_endpoint(self):
+        from soup_cli.utils.tracing import validate_otlp_endpoint
+
+        with pytest.raises(ValueError, match="private"):
+            validate_otlp_endpoint("https://100.64.0.1:4317")
+
+    def test_telemetry_endpoint(self):
+        from soup_cli.utils.trackers import _telemetry_endpoint_is_safe
+
+        assert _telemetry_endpoint_is_safe("https://100.64.0.1/i/v0/e/") is False
+
+    def test_ingest_pull_needs_the_private_host_opt_in(self):
+        from soup_cli.utils.ingest_pull import _is_private
+
+        assert _is_private("https://100.64.0.1") is True
