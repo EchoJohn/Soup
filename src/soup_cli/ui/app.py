@@ -1042,17 +1042,21 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
 
         from fastapi.responses import StreamingResponse
 
+        from soup_cli.utils.net_guard import refuse_private_ip_literal
+
         # Validate messages
         if not req.messages:
             raise HTTPException(status_code=400, detail="messages cannot be empty")
 
-        # SSRF protection: localhost-only HTTP, HTTPS for remote
+        # SSRF protection: localhost-only HTTP, HTTPS for remote, and no
+        # private / link-local / reserved IP literal on either scheme.
+        # 0.0.0.0 is the bind-any wildcard, not a loopback address.
         parsed = urlparse(req.endpoint)
         if parsed.scheme == "http":
             import ipaddress as _ipaddr
 
             host = parsed.hostname or ""
-            is_local = host in ("localhost", "0.0.0.0")
+            is_local = host == "localhost"
             if not is_local:
                 try:
                     addr = _ipaddr.ip_address(host)
@@ -1069,6 +1073,12 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
                 status_code=400,
                 detail="Only HTTP (localhost) or HTTPS endpoints allowed",
             )
+        try:
+            refuse_private_ip_literal(parsed.hostname, label="endpoint")
+        except ValueError as exc:
+            # The message is fixed text (the label is a constant); the
+            # endpoint itself is never echoed back.
+            raise HTTPException(status_code=400, detail=str(exc)) from None
 
         # Validate bounds
         if req.max_tokens > 16384:

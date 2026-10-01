@@ -171,9 +171,15 @@ def load_rubric(path: Path) -> dict:
 
 
 def validate_judge_api_base(api_base: Optional[str]) -> None:
-    """SSRF protection for judge API base URL."""
+    """SSRF protection for judge API base URL.
+
+    Every judge request goes through here (``JudgeEvaluator.__init__``), whether
+    the URL came from ``--api-base`` or from a config file.
+    """
     if api_base is None:
         return
+
+    from soup_cli.utils.net_guard import refuse_private_ip_literal
 
     parsed = urlparse(api_base)
     if parsed.scheme not in ("http", "https"):
@@ -190,6 +196,8 @@ def validate_judge_api_base(api_base: Optional[str]) -> None:
                 "HTTP is only allowed for localhost. "
                 "Use HTTPS for remote URLs."
             )
+    # ...and no private / link-local / reserved IP literal on either scheme.
+    refuse_private_ip_literal(parsed.hostname, label="judge URL")
 
 
 def _build_judge_prompt(

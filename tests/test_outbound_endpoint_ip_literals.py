@@ -1,0 +1,413 @@
+"""Outbound endpoint validators refuse non-public IP literals on every scheme.
+
+Each validator below sits in front of an outbound HTTP request whose URL comes
+from a flag, a config file or a request body. They already refused plain HTTP
+to a non-loopback host. They must also refuse a URL whose host is an IP literal
+in a non-public range, in every spelling ``net_guard.parse_ip_literal`` accepts
+(abbreviated, decimal, hex and octal IPv4, IPv4-mapped IPv6), while loopback
+literals and hostnames keep working. Hostnames are not resolved, here or
+anywhere else in the repo, so this narrows what a URL can name directly; it
+does not make an internal service unreachable by name.
+
+No test in this file touches the network: ``httpx.post`` and ``httpx.stream``
+are replaced by a recorder that raises instead of connecting. Every refused
+case asserts the recorder was never reached, and every allowed case asserts it
+WAS reached, so the first assertion cannot pass vacuously.
+"""
+
+from __future__ import annotations
+
+import io
+import re
+from types import SimpleNamespace
+
+import pytest
+
+_REFUSED = "private/link-local/reserved IP hosts are not allowed"
+
+# The host part of the URL, as written in its authority.
+_NON_PUBLIC_HOSTS = [
+    pytest.param("10.0.0.1", id="10/8"),
+    pytest.param("172.16.0.1", id="172.16/12"),
+    pytest.param("192.168.1.10:8443", id="192.168/16-with-port"),
+    pytest.param("169.254.169.254", id="link-local-v4"),
+    pytest.param("[fd00::1]", id="unique-local-v6"),
+    pytest.param("[fe80::1]", id="link-local-v6"),
+    pytest.param("[::ffff:10.0.0.1]", id="v4-mapped-v6"),
+    pytest.param("[64:ff9b::a9fe:a9fe]", id="nat64-v6"),
+    pytest.param("10.1", id="abbreviated-v4"),
+    pytest.param("167772161", id="decimal-v4"),
+    pytest.param("0x0a000001", id="hex-v4"),
+    pytest.param("012.0.0.1", id="octal-v4"),
+    pytest.param("169.254.169.254.", id="trailing-dot"),
+    pytest.param("0.0.0.0", id="unspecified-v4"),
+    pytest.param("[::]", id="unspecified-v6"),
+    pytest.param("224.0.0.1", id="multicast-v4"),
+]
+
+# Loopback is the one non-public range these endpoints exist to reach.
+_ALLOWED_HOSTS = [
+    pytest.param("api.example.com", id="hostname"),
+    pytest.param("8.8.8.8", id="public-v4"),
+    pytest.param("127.0.0.1:8443", id="loopback-v4"),
+    pytest.param("127.0.0.5", id="loopback-range"),
+    pytest.param("127.1", id="abbreviated-loopback"),
+    pytest.param("[::1]:8443", id="loopback-v6"),
+    pytest.param("[::ffff:127.0.0.1]", id="v4-mapped-loopback"),
+]
+
+
+class _RequestAttemptedError(Exception):
+    """Raised by the recorder in place of a request."""
+
+
+@pytest.fixture
+def sent(monkeypatch) -> list[tuple[str, dict]]:
+    """``httpx.post`` / ``httpx.stream`` replaced by a recorder that never connects."""
+    import httpx
+
+    calls: list[tuple[str, dict]] = []
+
+    def _post(url, *args, **kwargs):
+        calls.append((str(url), dict(kwargs.get("headers") or {})))
+        raise _RequestAttemptedError(str(url))
+
+    def _stream(method, url, *args, **kwargs):
+        calls.append((str(url), dict(kwargs.get("headers") or {})))
+        raise _RequestAttemptedError(str(url))
+
+    monkeypatch.setattr(httpx, "post", _post)
+    monkeypatch.setattr(httpx, "stream", _stream)
+    return calls
+
+
+@pytest.fixture(autouse=True)
+def _online_dpo_without_trl(monkeypatch):
+    """Keep the online-DPO judge path off trl (its version probe imports it)."""
+    import soup_cli.trainer.online_dpo as od
+
+    monkeypatch.setattr(od, "_trl_has_judges", lambda: False)
+    monkeypatch.setattr(od, "_ONLINE_DPO_JUDGE_OVERRIDE", None)
+
+
+# --- one adapter per gate; each takes the URL's scheme://authority ----------
+
+
+def _vllm_url(base: str) -> None:
+    from soup_cli.data.providers.vllm import validate_vllm_url
+
+    validate_vllm_url(base)
+
+
+def _vllm_generate(base: str) -> None:
+    from soup_cli.data.providers.vllm import generate_vllm
+
+    generate_vllm(
+        prompt="p", count=1, fmt="alpaca", model_name="m", base_url=base,
+        temperature=0.0, generation_prompt="g",
+    )
+
+
+def _generate_openai(base: str) -> None:
+    from soup_cli.commands.generate import _generate_openai as run
+
+    run(
+        prompt="p", count=1, fmt="alpaca", model_name="m", api_key="sk-test",
+        api_base=base, temperature=0.0, seed_examples=[], generation_prompt="g",
+    )
+
+
+def _generate_server(base: str) -> None:
+    from soup_cli.commands.generate import _generate_server as run
+
+    run(
+        prompt="p", count=1, fmt="alpaca", model_name="m", api_base=base,
+        temperature=0.0, seed_examples=[], generation_prompt="g",
+    )
+
+
+def _judge_api_base(base: str) -> None:
+    from soup_cli.eval.judge import validate_judge_api_base
+
+    validate_judge_api_base(base)
+
+
+def _judge_evaluator(base: str) -> None:
+    from soup_cli.eval.judge import JudgeEvaluator
+
+    JudgeEvaluator(provider="server", model="m", api_base=base)._call_llm("p")
+
+
+def _gate_suite_task(base: str) -> None:
+    from soup_cli.eval.gate import GateTask
+
+    GateTask(
+        type="judge", name="t", threshold=0.5, prompts="p.jsonl", judge_model=f"{base}/m"
+    )
+
+
+def _online_dpo_field(base: str) -> None:
+    from soup_cli.config.schema import TrainingConfig
+
+    TrainingConfig(online_dpo_judge=f"{base}/m")
+
+
+def _online_dpo_trainer(base: str) -> None:
+    """Trainer setup, reached with a config the schema never validated."""
+    import soup_cli.trainer.online_dpo as od
+
+    wrapper = object.__new__(od.OnlineDPOTrainerWrapper)
+    wrapper._build_judge_or_reward(
+        SimpleNamespace(online_dpo_judge=f"{base}/m", reward_model=None)
+    )
+
+
+_VALIDATORS = [
+    pytest.param(_vllm_url, id="vllm-url"),
+    pytest.param(_vllm_generate, id="vllm-generate"),
+    pytest.param(_generate_openai, id="generate-openai"),
+    pytest.param(_generate_server, id="generate-server"),
+    pytest.param(_judge_api_base, id="judge-api-base"),
+    pytest.param(_judge_evaluator, id="judge-evaluator"),
+    pytest.param(_gate_suite_task, id="gate-suite-judge-model"),
+    pytest.param(_online_dpo_field, id="online-dpo-judge-field"),
+    pytest.param(_online_dpo_trainer, id="online-dpo-trainer"),
+]
+# The adapters that go on to make a request once their gate passes.
+_SINKS = frozenset({_vllm_generate, _generate_openai, _generate_server, _judge_evaluator})
+
+
+class TestNonPublicLiteralsAreRefused:
+    @pytest.mark.parametrize("host", _NON_PUBLIC_HOSTS)
+    @pytest.mark.parametrize("validator", _VALIDATORS)
+    def test_refused_before_any_request(self, validator, host, sent):
+        with pytest.raises(ValueError, match=re.escape(_REFUSED)):
+            validator(f"https://{host}")
+        assert sent == [], f"a request was attempted for {host!r}: {sent}"
+
+    @pytest.mark.parametrize("validator", _VALIDATORS)
+    def test_unspecified_address_is_not_local_over_http(self, validator, sent):
+        with pytest.raises(ValueError):
+            validator("http://0.0.0.0:8000")
+        assert sent == []
+
+
+class TestPublicAndLoopbackStillPass:
+    @pytest.mark.parametrize("host", _ALLOWED_HOSTS)
+    @pytest.mark.parametrize("validator", _VALIDATORS)
+    def test_allowed(self, validator, host, sent):
+        base = f"https://{host}"
+        try:
+            validator(base)
+        except _RequestAttemptedError:
+            pass
+        urls = [url for url, _headers in sent]
+        if validator in _SINKS:
+            assert len(urls) == 1 and urls[0].startswith(base + "/"), urls
+        else:
+            assert urls == []
+
+    @pytest.mark.parametrize("base", ["http://localhost:8000", "http://127.0.0.1:8000"])
+    @pytest.mark.parametrize("validator", _VALIDATORS)
+    def test_loopback_over_http(self, validator, base, sent):
+        try:
+            validator(base)
+        except _RequestAttemptedError:
+            pass
+        assert len(sent) == (1 if validator in _SINKS else 0)
+
+    def test_default_openai_base_still_carries_the_key(self, sent):
+        from soup_cli.commands.generate import _generate_openai as run
+
+        with pytest.raises(_RequestAttemptedError):
+            run(
+                prompt="p", count=1, fmt="alpaca", model_name="m", api_key="sk-test",
+                api_base=None, temperature=0.0, seed_examples=[], generation_prompt="g",
+            )
+        [(url, headers)] = sent
+        assert url == "https://api.openai.com/v1/chat/completions"
+        assert headers.get("Authorization") == "Bearer sk-test"
+
+
+class TestRemoteHttpKeepsItsMessage:
+    """The scheme check still runs first, so the existing message is unchanged."""
+
+    @pytest.mark.parametrize(
+        ("validator", "message"),
+        [
+            (_vllm_url, "HTTPS for remote"),
+            (_generate_openai, "HTTPS for remote"),
+            (_generate_server, "HTTPS for remote"),
+            (_judge_api_base, "Use HTTPS for remote"),
+            (_gate_suite_task, "disallowed scheme"),
+        ],
+    )
+    def test_remote_http(self, validator, message, sent):
+        with pytest.raises(ValueError, match=message):
+            validator("http://10.0.0.1:8000")
+        assert sent == []
+
+    @pytest.mark.parametrize("validator", [_generate_openai, _generate_server])
+    def test_unspecified_address_is_remote_to_the_scheme_check(self, validator, sent):
+        """0.0.0.0 is the bind-any wildcard; these two used to count it as loopback."""
+        with pytest.raises(ValueError, match="HTTPS for remote"):
+            validator("http://0.0.0.0:8000")
+        assert sent == []
+
+
+class TestShipJudgeModelFlag:
+    @pytest.fixture
+    def out(self, monkeypatch) -> io.StringIO:
+        from rich.console import Console
+
+        import soup_cli.commands.ship as ship
+
+        buf = io.StringIO()
+        monkeypatch.setattr(ship, "console", Console(file=buf, width=400, color_system=None))
+        return buf
+
+    @pytest.mark.parametrize("host", _NON_PUBLIC_HOSTS)
+    def test_refused_as_a_usage_error(self, host, out):
+        import click
+
+        from soup_cli.commands.ship import _validate_judge_model_url
+
+        with pytest.raises(click.exceptions.Exit) as info:
+            _validate_judge_model_url(f"https://{host}/m")
+        assert info.value.exit_code == 3
+        assert f"--judge-model: {_REFUSED}" in out.getvalue()
+
+    @pytest.mark.parametrize("host", _ALLOWED_HOSTS)
+    def test_allowed(self, host, out):
+        from soup_cli.commands.ship import _validate_judge_model_url
+
+        _validate_judge_model_url(f"https://{host}/m")
+        assert out.getvalue() == ""
+
+
+class TestChatProxy:
+    @pytest.fixture
+    def post(self, sent):
+        pytest.importorskip("fastapi")
+        from fastapi.testclient import TestClient
+
+        from soup_cli.ui.app import create_app, get_auth_token
+
+        client = TestClient(create_app())
+        headers = {"Authorization": f"Bearer {get_auth_token()}"}
+
+        def _post(endpoint: str):
+            body = {"messages": [{"role": "user", "content": "hi"}], "endpoint": endpoint}
+            return client.post("/api/chat/send", json=body, headers=headers)
+
+        return _post
+
+    @pytest.mark.parametrize("host", _NON_PUBLIC_HOSTS)
+    def test_refused_with_400_before_dispatch(self, host, post, sent):
+        resp = post(f"https://{host}")
+        assert resp.status_code == 400, resp.text
+        detail = resp.json()["detail"]
+        assert detail == f"endpoint: {_REFUSED} (SSRF protection)"
+        assert sent == []
+
+    @pytest.mark.parametrize("host", _ALLOWED_HOSTS)
+    def test_allowed_endpoint_is_dispatched(self, host, post, sent):
+        resp = post(f"https://{host}")
+        assert resp.status_code == 200, resp.text
+        assert [url for url, _ in sent] == [f"https://{host}/v1/chat/completions"]
+
+    def test_unspecified_address_over_http_is_refused(self, post, sent):
+        """0.0.0.0 is the bind-any wildcard; the scheme check used to count it as local."""
+        resp = post("http://0.0.0.0:8000")
+        assert resp.status_code == 400, resp.text
+        assert resp.json()["detail"] == "HTTP only allowed for localhost endpoints"
+        assert sent == []
+
+    def test_loopback_range_over_http_is_dispatched(self, post, sent):
+        resp = post("http://127.0.0.5:8000")
+        assert resp.status_code == 200, resp.text
+        assert [url for url, _ in sent] == ["http://127.0.0.5:8000/v1/chat/completions"]
+
+
+_ODPO_YAML = (
+    "base: sshleifer/tiny-gpt2\ntask: online_dpo\ndata:\n  train: x.jsonl\n"
+    'training:\n  online_dpo_judge: "{judge}"\n'
+)
+
+
+class TestConfigLoad:
+    """A shared soup.yaml is refused at load, before any model download."""
+
+    @pytest.mark.parametrize(
+        "judge",
+        [
+            "https://10.0.0.1/m",
+            "https://[fd00::1]:8443/m",
+            "https://167772161/m",
+            "http://169.254.169.254/m",
+        ],
+    )
+    def test_non_public_judge_literal_is_refused(self, judge):
+        from soup_cli.config.loader import load_config_from_string
+
+        with pytest.raises(ValueError) as info:
+            load_config_from_string(_ODPO_YAML.format(judge=judge))
+        assert "online_dpo_judge" in str(info.value)
+        assert _REFUSED in str(info.value)
+
+    @pytest.mark.parametrize(
+        "judge",
+        [
+            "https://judge.example.com/m",
+            "https://127.0.0.1:8443/m",
+            "http://localhost:8000/m",
+            "ollama://llama3.1",
+        ],
+    )
+    def test_other_judges_still_load(self, judge):
+        from soup_cli.config.loader import load_config_from_string
+
+        cfg = load_config_from_string(_ODPO_YAML.format(judge=judge))
+        assert cfg.training.online_dpo_judge == judge
+
+
+class TestTheSharedHelper:
+    @pytest.mark.parametrize(
+        "host",
+        [
+            None, "", "localhost", "localhost.", "127.0.0.1", "::1", "[::1]", "127.1",
+            "2130706433", "::ffff:127.0.0.1", "api.example.com", "8.8.8.8",
+            "2606:4700::1111",
+        ],
+    )
+    def test_passes(self, host):
+        from soup_cli.utils.net_guard import refuse_private_ip_literal
+
+        refuse_private_ip_literal(host, label="x")
+
+    @pytest.mark.parametrize(
+        "host",
+        ["10.0.0.1", "[fd00::1]", "FE80::1", "fe80::1%eth0", "169.254.169.254.", "0", "::"],
+    )
+    def test_refuses_with_the_label_first(self, host):
+        from soup_cli.utils.net_guard import refuse_private_ip_literal
+
+        with pytest.raises(ValueError) as info:
+            refuse_private_ip_literal(host, label="vLLM URL")
+        assert str(info.value) == f"vLLM URL: {_REFUSED} (SSRF protection)"
+
+    def test_mapped_loopback_does_not_depend_on_the_interpreter(self, monkeypatch):
+        """Whether ``IPv6Address.is_loopback`` looks through an IPv4-mapped address
+        depends on the interpreter's patch release, so the helper unwraps it
+        itself. Simulate an interpreter that does not."""
+        import ipaddress
+
+        from soup_cli.utils.net_guard import refuse_private_ip_literal
+
+        monkeypatch.setattr(
+            ipaddress.IPv6Address, "is_loopback", property(lambda self: self._ip == 1)
+        )
+        assert not ipaddress.ip_address("::ffff:127.0.0.1").is_loopback
+        refuse_private_ip_literal("::ffff:127.0.0.1", label="x")
+        with pytest.raises(ValueError, match=re.escape(_REFUSED)):
+            refuse_private_ip_literal("::ffff:10.0.0.1", label="x")

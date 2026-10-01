@@ -177,12 +177,22 @@ def _validate_judge_model_url(url: str) -> None:
     """SSRF guard for --judge-model: urlparse hostname check (not startswith).
 
     Blocks the ``http://localhost.attacker.com`` prefix-bypass that a bare
-    ``startswith("http://localhost")`` check would allow through.
+    ``startswith("http://localhost")`` check would allow through, and refuses a
+    private / link-local / reserved IP literal as a usage error before any
+    measurement runs.
     """
     from urllib.parse import urlparse
 
+    from soup_cli.utils.net_guard import refuse_private_ip_literal
+
     parsed = urlparse(url)
-    if parsed.scheme in ("ollama", "https"):
+    if parsed.scheme == "ollama":
+        return
+    if parsed.scheme == "https":
+        try:
+            refuse_private_ip_literal(parsed.hostname, label="--judge-model")
+        except ValueError as exc:
+            _fail(str(exc), _EXIT_USAGE)
         return
     if parsed.scheme == "http" and parsed.hostname in ("localhost", "127.0.0.1"):
         return
