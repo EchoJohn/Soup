@@ -22,6 +22,14 @@ reproducing 70+ versions of notes.
 
 - `100.64.0.0/10` and `fec0::/10` literals are now treated as non-public by every check that already refused private addresses (webhooks, the OTLP endpoint, telemetry, hub endpoints over HTTP, and `soup ingest --pull`, where `--allow-private-host` admits them).
 
+- Every check that refuses private addresses now also recognizes an IP literal written with non-ASCII digits or label separators, which an HTTP client folds to ASCII before it connects.
+
+### Fixed
+
+- `soup ship` checks `--judge-model` before it builds the base and tuned models; it used to load both and only then stop with a usage error.
+
+- The Web UI chat proxy answers 400, not 500, for an endpoint URL that does not parse.
+
 ### Security
 
 - Hardening of outbound endpoint validation. A security advisory with details and upgrade guidance will be published alongside this release.
