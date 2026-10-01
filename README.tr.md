@@ -1,4 +1,4 @@
-<!-- synced-from: README.md sha256:4ae5f66eddd67977f28411c5ae3c81c9eb09acfc741cdd9bd854ddb3c8f67d8d -->
+<!-- synced-from: README.md sha256:aca2a4e15b1d8c4055ac1b650f9fd514bdfdc024e7d9dd86211a0796263d1d4b -->
 <p align="center">🌍 <a href="README.md">English</a> | <strong>Türkçe</strong></p>
 
 <p align="center">
@@ -93,13 +93,13 @@ tek bir sıkılaştırma değişikliği içeren bir güvenlik yaması; v0.75.0'd
 birleştirilen her şey bir sonraki ara sürümde geliyor.
 
 - **Uç nokta URL'leri artık özel bir adresi doğrudan gösteremiyor.**
-  `soup generate --api-base` URL'si, vLLM sağlayıcısı, yargıç URL'leri (`soup eval judge`,
+  `soup data generate --api-base` URL'si, vLLM sağlayıcısı, yargıç URL'leri (`soup eval judge`,
   eval-gate paketleri, `soup ship --judge-model`, `training.online_dpo_judge`) ve Web
   arayüzünün sohbet vekili; özel, bağlantı-yerel (link-local) veya ayrılmış bir IP
   değişmezini yalnızca `http` üzerinden değil `https` üzerinden de reddediyor. Geri döngü
   (loopback) çalışmaya devam ediyor; ağınızdaki bir sunucuya ana makine adıyla erişin.
   Ayrıntılar bu sürümle birlikte yayımlanan bir danışma belgesinde.
-- **`http://0.0.0.0` artık yerel sayılmıyor**: `soup generate --api-base` ve Web
+- **`http://0.0.0.0` artık yerel sayılmıyor**: `soup data generate --api-base` ve Web
   arayüzünün sohbet vekili için `localhost` veya `127.0.0.1` kullanın.
 - **`100.64.0.0/10` ve `fec0::/10` herkese açık olmayan adres sayılıyor**: web kancaları,
   OTLP uç noktası ve `soup ingest --pull` dahil, özel adreslerin zaten reddedildiği her

@@ -92,12 +92,12 @@ of v0.75.1 with one hardening change; everything merged since v0.75.0 ships in t
 minor release.
 
 - **Endpoint URLs can no longer name a private address directly.** The
-  `soup generate --api-base` URL, the vLLM provider, judge URLs (`soup eval judge`,
+  `soup data generate --api-base` URL, the vLLM provider, judge URLs (`soup eval judge`,
   eval-gate suites, `soup ship --judge-model`, `training.online_dpo_judge`) and the Web UI
   chat proxy refuse a private, link-local or reserved IP literal over `https` as well as
   `http`. Loopback still works; address a server on your network by its hostname. Details
   in an advisory published with this release.
-- **`http://0.0.0.0` is no longer treated as local** by `soup generate --api-base` and
+- **`http://0.0.0.0` is no longer treated as local** by `soup data generate --api-base` and
   the Web UI chat proxy; use `localhost` or `127.0.0.1`.
 - **`100.64.0.0/10` and `fec0::/10` count as non-public** wherever private addresses were
   already refused, including webhooks, the OTLP endpoint and `soup ingest --pull`.

@@ -16,9 +16,9 @@ reproducing 70+ versions of notes.
 
 ### Changed
 
-- Outbound endpoint checks now refuse a private, link-local or reserved IP literal over `https` as well as `http`. This covers `soup generate --api-base`, the vLLM provider and the commands that use it, judge URLs in `soup eval judge`, eval-gate suites, `soup ship --judge-model` / `eval.ship.judge_model` and `training.online_dpo_judge`, and the Web UI chat proxy. Loopback still works; address a LAN server by its hostname. `training.online_dpo_judge` is now checked when soup.yaml loads, not only when the trainer starts.
+- Outbound endpoint checks now refuse a private, link-local or reserved IP literal over `https` as well as `http`. This covers `soup data generate --api-base`, the vLLM provider and the commands that use it, judge URLs in `soup eval judge`, eval-gate suites, `soup ship --judge-model` / `eval.ship.judge_model` and `training.online_dpo_judge`, and the Web UI chat proxy. Loopback still works; address a LAN server by its hostname. `training.online_dpo_judge` is now checked when soup.yaml loads, not only when the trainer starts.
 
-- `soup generate --api-base` and the Web UI chat proxy no longer treat `http://0.0.0.0` as local; use `localhost` or `127.0.0.1`.
+- `soup data generate --api-base` and the Web UI chat proxy no longer treat `http://0.0.0.0` as local; use `localhost` or `127.0.0.1`.
 
 - `100.64.0.0/10` and `fec0::/10` literals are now treated as non-public by every check that already refused private addresses (webhooks, the OTLP endpoint, telemetry, hub endpoints over HTTP, and `soup ingest --pull`, where `--allow-private-host` admits them).
 
