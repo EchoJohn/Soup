@@ -451,8 +451,9 @@ soup data generate --prompt "..." --seed examples.jsonl --count 100
 soup data generate --prompt "..." --provider server --api-base http://localhost:11434/v1
 ```
 
-`--api-base` takes plain HTTP only for loopback (`localhost`, `127.0.0.1`, `::1`) and HTTPS for
-any other host. A private, link-local or reserved IP literal is refused on either scheme, so
+With `--provider server`, `openai` or `vllm`, `--api-base` takes plain HTTP only for loopback
+(`localhost`, `127.0.0.1`, `::1`) and HTTPS for any other host; `--provider ollama` stays
+loopback-only. A private, link-local or reserved IP literal is refused on either scheme, so
 address a server on your network by its hostname.
 
 ### Multi-Provider Support
@@ -524,12 +525,12 @@ soup data augment ./data/train.jsonl --strategy translate --lang es,fr,de \
 soup data augment ./data/train.jsonl --strategy style --styles formal,casual \
   --output ./data/train_styled.jsonl
 
-# Local provider (Ollama / vLLM) — loopback-only, pick the model + base URL
+# Local provider (Ollama, loopback-only) — pick the model + base URL
 soup data augment ./data/train.jsonl --strategy rephrase --count 2 \
   --provider ollama --model qwen2.5:0.5b --output ./data/train_local.jsonl
 ```
 
-Works with any provider supported by `soup data generate` (OpenAI, Ollama, vLLM, local server). `--model` and `--base-url` select a specific local model/endpoint. The Ollama path is loopback-only; the vLLM path takes plain HTTP only for loopback and HTTPS for a remote server, and refuses a private, link-local or reserved IP literal (SSRF-hardened). `--count` is capped at 10; `--lang` and `--styles` each capped at 10 entries × 32 chars.
+Works with `--provider ollama` (the default), `anthropic` or `vllm`. `--model` and `--base-url` select a specific model/endpoint. The Ollama path is loopback-only; the vLLM path takes plain HTTP only for loopback and HTTPS for a remote server, and refuses a private, link-local or reserved IP literal (SSRF-hardened). `--count` is capped at 10; `--lang` and `--styles` each capped at 10 entries × 32 chars.
 
 A provider call that fails (transport error, non-200 status, malformed response) or returns an empty reply never becomes a row: that variant is dropped. The summary reports `N of M provider calls failed` with the first error, and the command exits 1 without writing the output file when no call produced a usable row.
 
