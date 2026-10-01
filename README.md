@@ -87,27 +87,20 @@ infrastructure instead of improving models. Soup fixes that.
 
 ## What's New
 
-**v0.75.1 — hardening, and cloud runs that keep what they produced.** A maintenance
-release on top of v0.75.0: no new training features, and a few defaults that change when
-you upgrade.
+**v0.75.2 — outbound endpoint checks refuse private addresses.** A security patch on top
+of v0.75.1 with one hardening change; everything merged since v0.75.0 ships in the next
+minor release.
 
-- **Hardening across the CLI, the inference server, the Web UI, MCP execution, config
-  parsing and `.can` handling.** Details in an advisory published with this release.
-- **`soup runs clean` gained `--no-keep-weights`**, which deletes whole non-best
-  checkpoints rather than only their optimizer and scheduler states. `--keep-weights`
-  stays the default and now means the same thing on every supported Click version — on
-  Click 8.1 it used to delete whole checkpoints anyway.
-- **Cloud runs keep their outputs.** `soup train --cloud modal` writes run outputs to the
-  `soup-outputs` Modal volume and downloads them into your local output directory when the
-  run ends, including after a failed run; checkpoints used to disappear with the container.
-- **Ctrl+C on `soup train --cloud lambda --cloud-submit` waits for the controller** to
-  terminate the Lambda instance. The controller was previously killed a quarter of a
-  second later, which could leave a paid instance running (Linux/macOS).
-- **Upgrading changes a few defaults.** `soup push --hub modelscope` and `--hub modelers`
-  read `MODELSCOPE_API_TOKEN` and `MODELERS_TOKEN` rather than `HF_TOKEN`, so one hub's
-  token is never offered to another; and an `https` judge URL whose host is not
-  `api.openai.com` is treated as an OpenAI-compatible server and called without
-  `OPENAI_API_KEY`.
+- **Endpoint URLs can no longer name a private address directly.** The
+  `soup generate --api-base` URL, the vLLM provider, judge URLs (`soup eval judge`,
+  eval-gate suites, `soup ship --judge-model`, `training.online_dpo_judge`) and the Web UI
+  chat proxy refuse a private, link-local or reserved IP literal over `https` as well as
+  `http`. Loopback still works; address a server on your network by its hostname. Details
+  in an advisory published with this release.
+- **`http://0.0.0.0` is no longer treated as local** by `soup generate --api-base` and
+  the Web UI chat proxy; use `localhost` or `127.0.0.1`.
+- **`100.64.0.0/10` and `fec0::/10` count as non-public** wherever private addresses were
+  already refused, including webhooks, the OTLP endpoint and `soup ingest --pull`.
 
 > Python **3.10–3.12** only. On 3.13+, pip used to resolve untested PyTorch wheels that
 > crash in the native extension before Soup runs at all.

@@ -1,4 +1,4 @@
-<!-- synced-from: README.md sha256:b524929506f026bba7a1f4522d3273328123c696a31b72dd1c7c4bee993a8fd4 -->
+<!-- synced-from: README.md sha256:4ae5f66eddd67977f28411c5ae3c81c9eb09acfc741cdd9bd854ddb3c8f67d8d -->
 <p align="center">🌍 <a href="README.md">English</a> | <strong>Türkçe</strong></p>
 
 <p align="center">
@@ -88,30 +88,22 @@ yerine altyapıyla boğuşarak geçiriyor. Soup bunu çözer.
 
 ## Yenilikler
 
-**v0.75.1 — sıkılaştırma ve ürettiğini koruyan bulut çalıştırmaları.** v0.75.0'ın üzerine
-bir bakım sürümü: yeni eğitim özelliği yok, ama yükseltirken değişen birkaç varsayılan var.
+**v0.75.2 — giden uç nokta denetimleri özel adresleri reddediyor.** v0.75.1'in üzerine
+tek bir sıkılaştırma değişikliği içeren bir güvenlik yaması; v0.75.0'dan bu yana
+birleştirilen her şey bir sonraki ara sürümde geliyor.
 
-- **CLI, çıkarım sunucusu, Web arayüzü, MCP yürütmesi, yapılandırma ayrıştırması ve `.can`
-  işlemesi genelinde sıkılaştırma.** Ayrıntılar bu sürümle birlikte yayımlanan bir danışma
-  belgesinde.
-- **`soup runs clean` artık `--no-keep-weights` seçeneğini kabul ediyor**; bu seçenek, en
-  iyi olmayan kontrol noktalarını yalnızca optimizer ve zamanlayıcı durumlarıyla değil
-  bütünüyle siliyor. `--keep-weights` varsayılan olarak kalıyor ve artık desteklenen her
-  Click sürümünde aynı anlama geliyor — Click 8.1'de eskiden kontrol noktalarının tamamını
-  yine de siliyordu.
-- **Bulut çalıştırmaları çıktılarını koruyor.** `soup train --cloud modal`, çalıştırma
-  çıktılarını `soup-outputs` Modal birimine yazıyor ve çalıştırma bittiğinde — başarısız
-  bir çalıştırmadan sonra da — yerel çıktı dizininize indiriyor; kontrol noktaları eskiden
-  kapsayıcıyla birlikte kayboluyordu.
-- **`soup train --cloud lambda --cloud-submit` sırasında Ctrl+C artık denetleyicinin**
-  Lambda örneğini sonlandırmasını bekliyor. Denetleyici eskiden çeyrek saniye sonra
-  öldürülüyordu, bu da ücretli bir örneğin çalışmaya devam etmesine yol açabiliyordu
-  (Linux/macOS).
-- **Yükseltmek birkaç varsayılanı değiştiriyor.** `soup push --hub modelscope` ve
-  `--hub modelers`, `HF_TOKEN` yerine `MODELSCOPE_API_TOKEN` ve `MODELERS_TOKEN` okuyor;
-  böylece bir hub'ın belirteci hiçbir zaman başka bir hub'a sunulmuyor. Ayrıca ana
-  makinesi `api.openai.com` olmayan bir `https` yargıç URL'si, OpenAI uyumlu bir sunucu
-  olarak kabul edilip `OPENAI_API_KEY` olmadan çağrılıyor.
+- **Uç nokta URL'leri artık özel bir adresi doğrudan gösteremiyor.**
+  `soup generate --api-base` URL'si, vLLM sağlayıcısı, yargıç URL'leri (`soup eval judge`,
+  eval-gate paketleri, `soup ship --judge-model`, `training.online_dpo_judge`) ve Web
+  arayüzünün sohbet vekili; özel, bağlantı-yerel (link-local) veya ayrılmış bir IP
+  değişmezini yalnızca `http` üzerinden değil `https` üzerinden de reddediyor. Geri döngü
+  (loopback) çalışmaya devam ediyor; ağınızdaki bir sunucuya ana makine adıyla erişin.
+  Ayrıntılar bu sürümle birlikte yayımlanan bir danışma belgesinde.
+- **`http://0.0.0.0` artık yerel sayılmıyor**: `soup generate --api-base` ve Web
+  arayüzünün sohbet vekili için `localhost` veya `127.0.0.1` kullanın.
+- **`100.64.0.0/10` ve `fec0::/10` herkese açık olmayan adres sayılıyor**: web kancaları,
+  OTLP uç noktası ve `soup ingest --pull` dahil, özel adreslerin zaten reddedildiği her
+  yerde.
 
 > Yalnızca Python **3.10–3.12**. 3.13+ sürümlerinde pip, Soup daha hiç çalışmadan yerel
 > eklentide çöken, test edilmemiş PyTorch tekerleklerini çözümlüyordu.
