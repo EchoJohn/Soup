@@ -173,8 +173,9 @@ def load_rubric(path: Path) -> dict:
 def validate_judge_api_base(api_base: Optional[str]) -> None:
     """SSRF protection for judge API base URL.
 
-    Every judge request goes through here (``JudgeEvaluator.__init__``), whether
-    the URL came from ``--api-base`` or from a config file.
+    ``JudgeEvaluator`` calls this when it is constructed, so every judge it
+    builds is checked, whether the URL came from ``--api-base`` or from a
+    config file.
     """
     if api_base is None:
         return

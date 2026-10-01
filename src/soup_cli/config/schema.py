@@ -1568,7 +1568,10 @@ class TrainingConfig(BaseModel):
 
         from soup_cli.utils.net_guard import refuse_private_ip_literal
 
-        parsed = urlparse(value)
+        try:
+            parsed = urlparse(value)
+        except ValueError as exc:
+            raise ValueError("online_dpo_judge is not a valid URL") from exc
         if parsed.scheme in ("http", "https"):
             refuse_private_ip_literal(parsed.hostname, label="online_dpo_judge")
         return value

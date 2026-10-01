@@ -51,14 +51,14 @@ _NON_PUBLIC_HOSTS = [
     pytest.param("[fec0::1]", id="site-local-v6"),
     # A client IDNA-encodes a non-ASCII host before it connects, folding these
     # separators and digits to ASCII: httpx dials 10.0.0.1 for the first three.
-    pytest.param("10。0。0。1", id="ideographic-full-stops"),
-    pytest.param("10．0．0．1", id="fullwidth-full-stops"),
-    pytest.param("10｡0｡0｡1", id="halfwidth-ideographic-full-stops"),
-    pytest.param("169．254．169．254", id="link-local-fullwidth-stops"),
-    pytest.param("0xa。0。0。1", id="hex-with-ideographic-stops"),
-    pytest.param("10﹒0﹒0﹒1", id="small-full-stops"),
-    pytest.param("１０.0.0.1", id="fullwidth-digits"),
-    pytest.param("1­0.0.0.1", id="soft-hyphen"),
+    pytest.param("10\u30020\u30020\u30021", id="ideographic-full-stops"),
+    pytest.param("10\uff0e0\uff0e0\uff0e1", id="fullwidth-full-stops"),
+    pytest.param("10\uff610\uff610\uff611", id="halfwidth-ideographic-full-stops"),
+    pytest.param("169\uff0e254\uff0e169\uff0e254", id="link-local-fullwidth-stops"),
+    pytest.param("0xa\u30020\u30020\u30021", id="hex-with-ideographic-stops"),
+    pytest.param("10\ufe520\ufe520\ufe521", id="small-full-stops"),
+    pytest.param("\uff11\uff10.0.0.1", id="fullwidth-digits"),
+    pytest.param("1\u00ad0.0.0.1", id="soft-hyphen"),
 ]
 
 # Loopback is the one non-public range these endpoints exist to reach.
@@ -72,9 +72,9 @@ _ALLOWED_HOSTS = [
     pytest.param("127.1", id="abbreviated-loopback"),
     pytest.param("[::1]:8443", id="loopback-v6"),
     pytest.param("[::ffff:127.0.0.1]", id="v4-mapped-loopback"),
-    pytest.param("127。0。0。1", id="loopback-ideographic-stops"),
-    pytest.param("8．8．8．8", id="public-fullwidth-stops"),
-    pytest.param("münchen.example", id="idn-hostname"),
+    pytest.param("127\u30020\u30020\u30021", id="loopback-ideographic-stops"),
+    pytest.param("8\uff0e8\uff0e8\uff0e8", id="public-fullwidth-stops"),
+    pytest.param("m\u00fcnchen.example", id="idn-hostname"),
 ]
 
 
@@ -197,6 +197,26 @@ _VALIDATORS = [
 # The adapters that go on to make a request once their gate passes.
 _SINKS = frozenset({_vllm_generate, _generate_openai, _generate_server, _judge_evaluator})
 
+# The setting each gate names in its refusal.
+_LABELS = {
+    _vllm_url: "vLLM URL",
+    _vllm_generate: "vLLM URL",
+    _generate_openai: "api_base",
+    _generate_server: "api_base",
+    _judge_api_base: "judge URL",
+    _judge_evaluator: "judge URL",
+    _gate_suite_task: "judge_model URL",
+    _online_dpo_field: "online_dpo_judge",
+    _online_dpo_trainer: "judge URL",
+}
+
+_ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+
+def _plain(text: str) -> str:
+    """CLI output without colour codes and with Rich's line wrapping undone."""
+    return " ".join(_ANSI.sub("", text).split())
+
 
 class TestNonPublicLiteralsAreRefused:
     @pytest.mark.parametrize("host", _NON_PUBLIC_HOSTS)
@@ -205,6 +225,13 @@ class TestNonPublicLiteralsAreRefused:
         with pytest.raises(ValueError, match=re.escape(_REFUSED)):
             validator(f"https://{host}")
         assert sent == [], f"a request was attempted for {host!r}: {sent}"
+
+    @pytest.mark.parametrize("validator", _VALIDATORS)
+    def test_refusal_names_the_setting(self, validator, sent):
+        with pytest.raises(ValueError) as info:
+            validator("https://10.0.0.1")
+        assert f"{_LABELS[validator]}: {_REFUSED}" in str(info.value)
+        assert sent == []
 
     @pytest.mark.parametrize("validator", _VALIDATORS)
     def test_unspecified_address_is_not_local_over_http(self, validator, sent):
@@ -233,6 +260,22 @@ class TestPublicAndLoopbackStillPass:
     def test_loopback_over_http(self, validator, base, sent):
         try:
             validator(base)
+        except _RequestAttemptedError:
+            pass
+        assert len(sent) == (1 if validator in _SINKS else 0)
+
+    @pytest.mark.parametrize(
+        "validator",
+        [
+            _vllm_url, _vllm_generate, _generate_openai, _generate_server, _judge_api_base,
+            _judge_evaluator, _online_dpo_field,
+        ],
+    )
+    def test_ipv6_loopback_over_http(self, validator, sent):
+        """``::1`` is loopback for these gates. The eval-gate suite, ``soup ship`` and
+        the online-DPO trainer accept only ``localhost`` and ``127.0.0.1`` over http."""
+        try:
+            validator("http://[::1]:8000")
         except _RequestAttemptedError:
             pass
         assert len(sent) == (1 if validator in _SINKS else 0)
@@ -266,6 +309,20 @@ class TestRemoteHttpKeepsItsMessage:
     def test_remote_http(self, validator, message, sent):
         with pytest.raises(ValueError, match=message):
             validator("http://10.0.0.1:8000")
+        assert sent == []
+
+    @pytest.mark.parametrize(
+        ("validator", "message"),
+        [
+            (_vllm_url, "HTTPS for remote"),
+            (_generate_openai, "HTTPS for remote"),
+            (_generate_server, "HTTPS for remote"),
+            (_judge_api_base, "Use HTTPS for remote"),
+        ],
+    )
+    def test_localhost_lookalike_is_remote_over_http(self, validator, message, sent):
+        with pytest.raises(ValueError, match=message):
+            validator("http://localhost.attacker.example:8000")
         assert sent == []
 
     @pytest.mark.parametrize("validator", [_generate_openai, _generate_server])
@@ -304,6 +361,38 @@ class TestShipJudgeModelFlag:
 
         _validate_judge_model_url(f"https://{host}/m")
         assert out.getvalue() == ""
+
+    def test_refused_before_any_model_loads(self, monkeypatch, tmp_path):
+        """Through the real command: the judge URL is a usage error before the base
+        and tuned models are built, not after."""
+        import json
+
+        from typer.testing import CliRunner
+
+        from soup_cli.commands import ship as ship_cmd
+        from soup_cli.utils import live_eval
+
+        loads: list[str] = []
+
+        def _factory(model_id, **_kwargs):
+            loads.append(str(model_id))
+            return lambda prompt: ""
+
+        monkeypatch.setattr(live_eval, "make_generator", _factory)
+        monkeypatch.chdir(tmp_path)
+        row = {"prompt": "p", "expected": "x", "scoring": "contains"}
+        (tmp_path / "tasks.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
+        res = CliRunner().invoke(
+            ship_cmd.app,
+            [
+                "--base", "fake-base", "--adapter", "fake-adapter",
+                "--task-eval", "tasks.jsonl", "--task-mode", "judge_score",
+                "--judge-model", "https://10.0.0.1/m",
+            ],
+        )
+        assert res.exit_code == 3, (res.output, repr(res.exception))
+        assert f"--judge-model: {_REFUSED}" in _plain(res.output)
+        assert loads == []
 
 
 class TestChatProxy:
@@ -349,6 +438,28 @@ class TestChatProxy:
         assert resp.status_code == 200, resp.text
         assert [url for url, _ in sent] == ["http://127.0.0.5:8000/v1/chat/completions"]
 
+    @pytest.mark.parametrize(
+        "base", ["http://localhost:8000", "http://127.0.0.1:8000", "http://[::1]:8000"]
+    )
+    def test_loopback_spellings_over_http_are_dispatched(self, base, post, sent):
+        resp = post(base)
+        assert resp.status_code == 200, resp.text
+        assert [url for url, _ in sent] == [f"{base}/v1/chat/completions"]
+
+    def test_localhost_lookalike_over_http_is_refused(self, post, sent):
+        resp = post("http://localhost.attacker.example:8000")
+        assert resp.status_code == 400, resp.text
+        assert resp.json()["detail"] == "HTTP only allowed for localhost endpoints"
+        assert sent == []
+
+    @pytest.mark.parametrize("endpoint", ["https://[fd00::1/m", "https://[10.0.0.1]/m"])
+    def test_malformed_endpoint_is_a_bad_request(self, endpoint, post, sent):
+        """An unbalanced or non-IPv6 bracketed host is the client's error (400), not
+        the server's (500)."""
+        resp = post(endpoint)
+        assert resp.status_code == 400, resp.text
+        assert sent == []
+
 
 _ODPO_YAML = (
     "base: sshleifer/tiny-gpt2\ntask: online_dpo\ndata:\n  train: x.jsonl\n"
@@ -391,6 +502,48 @@ class TestConfigLoad:
         cfg = load_config_from_string(_ODPO_YAML.format(judge=judge))
         assert cfg.training.online_dpo_judge == judge
 
+    def test_an_unparsable_judge_url_names_the_setting(self):
+        from soup_cli.config.schema import TrainingConfig
+
+        with pytest.raises(ValueError, match="online_dpo_judge is not a valid URL"):
+            TrainingConfig(online_dpo_judge="https://[::1/m")
+
+
+class TestCliEntryPoints:
+    """The flags reach the same checks through the real commands."""
+
+    def test_data_generate_refuses_a_private_api_base(self, sent, tmp_path, monkeypatch):
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        monkeypatch.chdir(tmp_path)
+        res = CliRunner().invoke(
+            app,
+            [
+                "data", "generate", "--prompt", "x", "--provider", "server",
+                "--api-base", "https://10.0.0.1/v1", "--count", "1", "--output", "out.jsonl",
+            ],
+        )
+        assert res.exit_code == 1, (res.output, repr(res.exception))
+        assert f"api_base: {_REFUSED}" in _plain(res.output)
+        assert sent == []
+        assert not (tmp_path / "out.jsonl").exists()
+
+    def test_eval_judge_refuses_a_private_api_base(self, sent, tmp_path, monkeypatch):
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "t.jsonl").write_text('{"prompt": "p", "response": "r"}\n', encoding="utf-8")
+        res = CliRunner().invoke(
+            app, ["eval", "judge", "--target", "t.jsonl", "--api-base", "https://10.0.0.1/v1"]
+        )
+        assert res.exit_code == 1, (res.output, repr(res.exception))
+        assert f"judge URL: {_REFUSED}" in _plain(res.output)
+        assert sent == []
+
 
 class TestTheSharedHelper:
     @pytest.mark.parametrize(
@@ -408,7 +561,10 @@ class TestTheSharedHelper:
 
     @pytest.mark.parametrize(
         "host",
-        ["10.0.0.1", "[fd00::1]", "FE80::1", "fe80::1%eth0", "169.254.169.254.", "0", "::"],
+        [
+            "10.0.0.1", " 10.0.0.1", "[fd00::1]", "FE80::1", "fe80::1%eth0", "169.254.169.254.",
+            "0", "::",
+        ],
     )
     def test_refuses_with_the_label_first(self, host):
         from soup_cli.utils.net_guard import refuse_private_ip_literal
@@ -432,6 +588,19 @@ class TestTheSharedHelper:
         refuse_private_ip_literal("::ffff:127.0.0.1", label="x")
         with pytest.raises(ValueError, match=re.escape(_REFUSED)):
             refuse_private_ip_literal("::ffff:10.0.0.1", label="x")
+
+    @pytest.mark.parametrize(
+        "host",
+        ["\u00e9" * 64 + ".example", "\u00e9..example"],
+        ids=["label-too-long", "empty-label"],
+    )
+    def test_a_non_ascii_host_that_does_not_encode_is_a_hostname(self, host):
+        """No client can dial a host that does not IDNA-encode, and the check must not
+        raise on one either: it is treated as a hostname."""
+        from soup_cli.utils.net_guard import is_private_or_link_local, refuse_private_ip_literal
+
+        refuse_private_ip_literal(host, label="x")
+        assert is_private_or_link_local(host) is False
 
 
 class TestTheSharedPredicate:
@@ -481,14 +650,14 @@ class TestTheSharedPredicate:
         assert _is_private("https://100.64.0.1") is True
 
     @pytest.mark.parametrize(
-        "host", ["10。0。0。1", "１０.0.0.1", "1­0.0.0.1"]
+        "host", ["10\u30020\u30020\u30021", "\uff11\uff10.0.0.1", "1\u00ad0.0.0.1"]
     )
     def test_non_ascii_spellings_are_classified(self, host):
         from soup_cli.utils.net_guard import is_private_or_link_local
 
         assert is_private_or_link_local(host) is True
 
-    @pytest.mark.parametrize("host", ["8。8。8。8", "münchen.example"])
+    @pytest.mark.parametrize("host", ["8\u30028\u30028\u30028", "m\u00fcnchen.example"])
     def test_non_ascii_public_hosts_stay_public(self, host):
         from soup_cli.utils.net_guard import is_private_or_link_local
 
@@ -498,18 +667,31 @@ class TestTheSharedPredicate:
         from soup_cli.utils.webhooks import validate_webhook_url
 
         with pytest.raises(ValueError, match="private/link-local/reserved"):
-            validate_webhook_url("https://10。0。0。1/hook")
+            validate_webhook_url("https://10\u30020\u30020\u30021/hook")
 
     def test_otlp_endpoint_with_fullwidth_stops(self):
         from soup_cli.utils.tracing import validate_otlp_endpoint
 
         with pytest.raises(ValueError, match="private"):
-            validate_otlp_endpoint("https://10．0．0．1:4317")
+            validate_otlp_endpoint("https://10\uff0e0\uff0e0\uff0e1:4317")
+
+    def test_hub_endpoint_counts_shared_space_as_private(self):
+        from soup_cli.utils.hubs import validate_hub_endpoint
+
+        with pytest.raises(ValueError, match="private/link-local hosts require HTTPS"):
+            validate_hub_endpoint("http://100.64.0.1", hub="modelscope")
+
+    def test_hf_endpoint_counts_shared_space_as_private(self, monkeypatch):
+        from soup_cli.utils import hf
+
+        monkeypatch.setenv("HF_ENDPOINT", "http://100.64.0.1")
+        with pytest.raises(ValueError, match="private/link-local hosts require HTTPS"):
+            hf.resolve_endpoint()
 
     def test_ingest_pull_with_ideographic_stops(self):
         from soup_cli.utils.ingest_pull import _is_private
 
-        assert _is_private("https://10。0。0。1") is True
+        assert _is_private("https://10\u30020\u30020\u30021") is True
 
 
 class TestWhatTheClientConnectsTo:
@@ -518,7 +700,7 @@ class TestWhatTheClientConnectsTo:
     httpx would dial is a non-public, non-loopback IP literal, the check must
     refuse the URL, and when it is public or loopback, the check must not."""
 
-    @pytest.mark.parametrize("separator", [".", "。", "．", "｡"])
+    @pytest.mark.parametrize("separator", [".", "\u3002", "\uff0e", "\uff61"])
     @pytest.mark.parametrize(
         "address",
         [
@@ -537,7 +719,10 @@ class TestWhatTheClientConnectsTo:
         )
 
         url = f"https://{address.replace('.', separator)}/v1"
-        dialled = httpx.URL(url).host
+        try:
+            dialled = httpx.URL(url).host
+        except httpx.InvalidURL:
+            pytest.skip("this httpx refuses the spelling outright, so it cannot dial it")
         assert dialled.isascii(), dialled
         target = parse_ip_literal(dialled)
         assert target is not None, dialled

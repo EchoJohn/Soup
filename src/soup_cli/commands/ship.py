@@ -1044,21 +1044,22 @@ def _verdict_live(
     # would be an unbounded number of full model passes.
     noise_floor_runs = _validate_noise_floor_flag(noise_floor_runs)
 
+    # Judge modes need a judge model. Validate it BEFORE the base and tuned
+    # models load and before the noise floor is measured (it scores the leg-1
+    # task axis through the judge as well, #403) — a missing or refused judge
+    # URL is a usage error, not a runtime one discovered after a model load.
+    if task_mode == "judge_score":
+        if not judge_model:
+            _fail("--task-mode judge_score needs --judge-model <url>", _EXIT_USAGE)
+        _validate_judge_model_url(judge_model)
+    elif task_mode == "pairwise":
+        if not judge_model:
+            _fail("--task-mode pairwise needs --judge-model <url>", _EXIT_USAGE)
+        _validate_judge_model_url(judge_model)
+
     tuned_id = tuned if tuned else base
     try:
         base_gen, tuned_gen = _resolve_generators(base, tuned, adapter, device, quantization)
-        # Judge modes need a judge model. Validate it BEFORE measuring the
-        # noise floor, which now scores the leg-1 task axis through the judge as
-        # well (#403) — a missing / malformed judge is a usage error (exit 2),
-        # not a runtime one discovered mid-measurement.
-        if task_mode == "judge_score":
-            if not judge_model:
-                _fail("--task-mode judge_score needs --judge-model <url>", _EXIT_USAGE)
-            _validate_judge_model_url(judge_model)
-        elif task_mode == "pairwise":
-            if not judge_model:
-                _fail("--task-mode pairwise needs --judge-model <url>", _EXIT_USAGE)
-            _validate_judge_model_url(judge_model)
 
         measured_floor: Optional[NoiseFloor] = None
         if noise_floor_runs is not None:

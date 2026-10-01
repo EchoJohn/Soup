@@ -1051,7 +1051,12 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
         # SSRF protection: localhost-only HTTP, HTTPS for remote, and no
         # private / link-local / reserved IP literal on either scheme.
         # 0.0.0.0 is the bind-any wildcard, not a loopback address.
-        parsed = urlparse(req.endpoint)
+        try:
+            parsed = urlparse(req.endpoint)
+        except ValueError:
+            # e.g. an unbalanced or non-IPv6 bracketed host: a bad request,
+            # not a server error.
+            raise HTTPException(status_code=400, detail="endpoint is not a valid URL") from None
         if parsed.scheme == "http":
             import ipaddress as _ipaddr
 
