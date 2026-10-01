@@ -163,15 +163,22 @@ def score_exact(output: str, expected: str) -> bool:
 def score_contains(output: str, expected: str) -> bool:
     """True when ``expected`` appears in ``output`` as a whole alnum-bounded token.
 
-    Case-insensitive. ``14`` does not contain ``4``, and ``#### 420`` does not contain
-    ``42``. A token match cannot read negation (``not 42, so 41`` still contains ``42``);
+    Case-insensitive via ``str.lower``. ``14`` does not contain ``4``, and ``#### 420``
+    does not contain ``42``. A token match cannot read negation (``not 42, so 41`` contains ``42``);
     use ``scoring: "answer"`` to compare the answer a model states.
     """
-    needle = expected.strip()
+    needle = expected.strip().lower()
     if not needle:
         return True
-    pattern = r"(?<![A-Za-z0-9])" + re.escape(needle) + r"(?![A-Za-z0-9])"
-    return re.search(pattern, output, re.IGNORECASE) is not None
+    # Keep the literal first (without IGNORECASE) so re uses its linear prefix
+    # search. At the match's end, look back over the literal to check its left
+    # boundary. DOTALL's fixed-width skip also handles multiline literals.
+    pattern = (
+        re.escape(needle)
+        + rf"(?<![A-Za-z0-9](?s:.){{{len(needle)}}})"
+        + r"(?![A-Za-z0-9])"
+    )
+    return re.search(pattern, output.lower()) is not None
 
 
 def score_answer(output: str, expected: str) -> bool:

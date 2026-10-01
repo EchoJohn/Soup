@@ -821,7 +821,7 @@ How the string scorers read an output:
 | `scoring` | Scores | `expected: "4"` vs `The answer is 4.` | vs `14` |
 |---|---|---|---|
 | `answer` | The final answer each side states, read with the parser GRPO's `accuracy` reward uses (`#### 4`, `\boxed{4}`, `The answer is 4.`); numbers compare by value | match | no match |
-| `contains` | `expected` as a whole alphanumeric-bounded token, case-insensitive | match | no match |
+| `contains` | `expected` as a whole ASCII alphanumeric-bounded token after `str.lower()` on both sides; `İstanbul` / `istanbul` and `ſ` / `s` do not match | match | no match |
 | `exact` | The whole stripped output, case-insensitive | no match | no match |
 
 `answer` refuses, at load time, an `expected` that states no single answer (a multi-line
@@ -832,6 +832,9 @@ reads the answer a model *states*: `The capital of France is Paris.` scores `Fal
 gold `Paris` while `Answer: Paris` and `Paris` score `True` — prefer `answer` for math and
 short-answer tasks, where the model states its answer. The eval gate's `scorer:` override
 accepts `answer` too.
+
+`contains` searches the full output without truncation. Its literal search scales linearly
+with the output and expected-answer lengths, including repetitive text and long answers.
 
 **Changed:** `contains` used to be a raw substring test, so it paid `14` for an expected `4`.
 Scores recorded with the old test (a `soup eval gate --baseline` file or `registry://` row, or
