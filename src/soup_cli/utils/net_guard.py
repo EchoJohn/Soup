@@ -41,30 +41,25 @@ builds its own narrower OR-chain on top of it rather than calling
 from __future__ import annotations
 
 import ipaddress
-import re
-import unicodedata
 
 # Loopback hosts that may legitimately use plain HTTP (dev / self-hosted).
 LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
-
-# Label separators IDNA treats like ".", besides "." itself.
-_IDNA_DOTS = re.compile("[。．｡]")
 
 
 def _ascii_spellings(host: str) -> list[str]:
     """``host`` plus the ASCII forms an HTTP client may turn it into.
 
-    A client IDNA-encodes a non-ASCII host before it resolves it: httpx through
-    the ``idna`` package (IDNA 2008), urllib and :mod:`socket` through the
-    stdlib codec (IDNA 2003, whose nameprep step NFKC-folds and also drops
-    characters such as the soft hyphen). Either can turn text that is not an IP
-    literal into one -- ``10.0.0.1`` written with U+3002 IDEOGRAPHIC FULL STOP
-    in place of each dot, for instance -- so every form is classified, not only
-    the text the URL parser returned.
+    A client IDNA-encodes a non-ASCII host before it resolves it: urllib and
+    :mod:`socket` through the stdlib codec (IDNA 2003, whose nameprep step
+    NFKC-folds and drops characters such as the soft hyphen), httpx through the
+    ``idna`` package (IDNA 2008). Both treat U+3002, U+FF0E and U+FF61 as label
+    separators, so text that is not an IP literal as written -- ``10.0.0.1``
+    with U+3002 IDEOGRAPHIC FULL STOP in place of each dot, for instance -- can
+    be one once encoded. A form that fails to encode is skipped.
     """
     if host.isascii():
         return [host]
-    spellings = [host, _IDNA_DOTS.sub(".", unicodedata.normalize("NFKC", host))]
+    spellings = [host]
     try:
         spellings.append(host.encode("idna").decode("ascii"))
     except UnicodeError:
@@ -89,8 +84,9 @@ def parse_ip_literal(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address
     ``"evil.example.com"``) returns ``None`` rather than being resolved.
 
     A non-ASCII host is also read in the ASCII forms a client would connect to
-    (see :func:`_ascii_spellings`), so ``10.0.0.1`` written with ideographic
-    full stops parses as ``10.0.0.1``.
+    (see :func:`_ascii_spellings`), and the first form that is an IP literal is
+    returned, so ``10.0.0.1`` written with ideographic full stops parses as
+    ``10.0.0.1``.
     """
     for spelling in _ascii_spellings(host):
         addr = _parse_ascii_ip_literal(spelling)
@@ -155,10 +151,12 @@ def refuse_private_ip_literal(host: str | None, *, label: str) -> None:
     ``host`` is a URL's ``hostname``. It is refused when it is an IP literal, in
     any spelling :func:`parse_ip_literal` accepts (IPv4-mapped IPv6 included),
     that :func:`is_private_or_link_local` classifies as non-public, on every
-    scheme. Loopback stays allowed: these endpoints exist to reach a server on
-    the same machine. A hostname passes unchanged and is NOT resolved, so this
-    narrows which addresses a URL can name directly; it does not make internal
-    services unreachable by name. ``label`` names the setting in the message.
+    scheme. Loopback stays allowed, because a server on the same machine
+    (Ollama, vLLM, ``soup serve``) is a supported target. A hostname passes
+    unchanged and is NOT resolved, so this narrows which addresses a URL can
+    name directly; it does not make internal services unreachable by name. An
+    empty or missing host passes too: the caller's scheme check owns that case.
+    ``label`` names the setting in the message.
     """
     clean = (host or "").strip().lower().rstrip(".")
     if clean.startswith("[") and clean.endswith("]"):
