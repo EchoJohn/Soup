@@ -41,9 +41,41 @@ builds its own narrower OR-chain on top of it rather than calling
 from __future__ import annotations
 
 import ipaddress
+import re
+import unicodedata
 
 # Loopback hosts that may legitimately use plain HTTP (dev / self-hosted).
 LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+
+# Label separators IDNA treats like ".", besides "." itself.
+_IDNA_DOTS = re.compile("[。．｡]")
+
+
+def _ascii_spellings(host: str) -> list[str]:
+    """``host`` plus the ASCII forms an HTTP client may turn it into.
+
+    A client IDNA-encodes a non-ASCII host before it resolves it: httpx through
+    the ``idna`` package (IDNA 2008), urllib and :mod:`socket` through the
+    stdlib codec (IDNA 2003, whose nameprep step NFKC-folds and also drops
+    characters such as the soft hyphen). Either can turn text that is not an IP
+    literal into one -- ``10.0.0.1`` written with U+3002 IDEOGRAPHIC FULL STOP
+    in place of each dot, for instance -- so every form is classified, not only
+    the text the URL parser returned.
+    """
+    if host.isascii():
+        return [host]
+    spellings = [host, _IDNA_DOTS.sub(".", unicodedata.normalize("NFKC", host))]
+    try:
+        spellings.append(host.encode("idna").decode("ascii"))
+    except UnicodeError:
+        pass
+    try:
+        import idna  # noqa: PLC0415 — the encoder httpx uses; optional here
+
+        spellings.append(idna.encode(host.lower()).decode("ascii"))
+    except (ImportError, UnicodeError):  # idna.IDNAError is a UnicodeError
+        pass
+    return spellings
 
 
 def parse_ip_literal(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
@@ -55,7 +87,21 @@ def parse_ip_literal(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address
     library :func:`socket.inet_aton`.  The latter is a pure in-process
     string parser — no DNS lookup is performed. A hostname (``"localhost"``,
     ``"evil.example.com"``) returns ``None`` rather than being resolved.
+
+    A non-ASCII host is also read in the ASCII forms a client would connect to
+    (see :func:`_ascii_spellings`), so ``10.0.0.1`` written with ideographic
+    full stops parses as ``10.0.0.1``.
     """
+    for spelling in _ascii_spellings(host):
+        addr = _parse_ascii_ip_literal(spelling)
+        if addr is not None:
+            return addr
+    return None
+
+
+def _parse_ascii_ip_literal(
+    host: str,
+) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
     import socket  # noqa: PLC0415 — lazy import (stdlib, negligible cost)
 
     clean_host = host.rstrip(".")

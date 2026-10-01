@@ -49,6 +49,16 @@ _NON_PUBLIC_HOSTS = [
     pytest.param("[::ffff:100.64.0.1]", id="shared-space-v4-mapped"),
     # Deprecated IPv6 site-local, which ipaddress still reports as global.
     pytest.param("[fec0::1]", id="site-local-v6"),
+    # A client IDNA-encodes a non-ASCII host before it connects, folding these
+    # separators and digits to ASCII: httpx dials 10.0.0.1 for the first three.
+    pytest.param("10。0。0。1", id="ideographic-full-stops"),
+    pytest.param("10．0．0．1", id="fullwidth-full-stops"),
+    pytest.param("10｡0｡0｡1", id="halfwidth-ideographic-full-stops"),
+    pytest.param("169．254．169．254", id="link-local-fullwidth-stops"),
+    pytest.param("0xa。0。0。1", id="hex-with-ideographic-stops"),
+    pytest.param("10﹒0﹒0﹒1", id="small-full-stops"),
+    pytest.param("１０.0.0.1", id="fullwidth-digits"),
+    pytest.param("1­0.0.0.1", id="soft-hyphen"),
 ]
 
 # Loopback is the one non-public range these endpoints exist to reach.
@@ -62,6 +72,9 @@ _ALLOWED_HOSTS = [
     pytest.param("127.1", id="abbreviated-loopback"),
     pytest.param("[::1]:8443", id="loopback-v6"),
     pytest.param("[::ffff:127.0.0.1]", id="v4-mapped-loopback"),
+    pytest.param("127。0。0。1", id="loopback-ideographic-stops"),
+    pytest.param("8．8．8．8", id="public-fullwidth-stops"),
+    pytest.param("münchen.example", id="idn-hostname"),
 ]
 
 
@@ -466,3 +479,71 @@ class TestTheSharedPredicate:
         from soup_cli.utils.ingest_pull import _is_private
 
         assert _is_private("https://100.64.0.1") is True
+
+    @pytest.mark.parametrize(
+        "host", ["10。0。0。1", "１０.0.0.1", "1­0.0.0.1"]
+    )
+    def test_non_ascii_spellings_are_classified(self, host):
+        from soup_cli.utils.net_guard import is_private_or_link_local
+
+        assert is_private_or_link_local(host) is True
+
+    @pytest.mark.parametrize("host", ["8。8。8。8", "münchen.example"])
+    def test_non_ascii_public_hosts_stay_public(self, host):
+        from soup_cli.utils.net_guard import is_private_or_link_local
+
+        assert is_private_or_link_local(host) is False
+
+    def test_webhook_url_with_ideographic_stops(self):
+        from soup_cli.utils.webhooks import validate_webhook_url
+
+        with pytest.raises(ValueError, match="private/link-local/reserved"):
+            validate_webhook_url("https://10。0。0。1/hook")
+
+    def test_otlp_endpoint_with_fullwidth_stops(self):
+        from soup_cli.utils.tracing import validate_otlp_endpoint
+
+        with pytest.raises(ValueError, match="private"):
+            validate_otlp_endpoint("https://10．0．0．1:4317")
+
+    def test_ingest_pull_with_ideographic_stops(self):
+        from soup_cli.utils.ingest_pull import _is_private
+
+        assert _is_private("https://10。0。0。1") is True
+
+
+class TestWhatTheClientConnectsTo:
+    """The checks read ``urlparse(url).hostname``; httpx connects to
+    ``httpx.URL(url).host``, which it IDNA-encodes first. Whenever the host
+    httpx would dial is a non-public, non-loopback IP literal, the check must
+    refuse the URL, and when it is public or loopback, the check must not."""
+
+    @pytest.mark.parametrize("separator", [".", "。", "．", "｡"])
+    @pytest.mark.parametrize(
+        "address",
+        [
+            "10.0.0.1", "192.168.1.10", "169.254.169.254", "100.64.0.1", "0xa.0.0.1",
+            "10.1", "127.0.0.1", "127.0.0.5", "8.8.8.8",
+        ],
+    )
+    def test_the_check_agrees_with_the_client(self, separator, address):
+        httpx = pytest.importorskip("httpx")
+        from urllib.parse import urlparse
+
+        from soup_cli.utils.net_guard import (
+            is_private_or_link_local,
+            parse_ip_literal,
+            refuse_private_ip_literal,
+        )
+
+        url = f"https://{address.replace('.', separator)}/v1"
+        dialled = httpx.URL(url).host
+        assert dialled.isascii(), dialled
+        target = parse_ip_literal(dialled)
+        assert target is not None, dialled
+        hostname = urlparse(url).hostname
+        if is_private_or_link_local(dialled) and not target.is_loopback:
+            with pytest.raises(ValueError, match=re.escape(_REFUSED)):
+                refuse_private_ip_literal(hostname, label="x")
+        else:
+            refuse_private_ip_literal(hostname, label="x")
